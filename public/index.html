@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Browser Mirror</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#10131a;color:#eef2ff;font:15px system-ui,sans-serif}
+header{padding:16px;background:#191f2b;font-weight:700}main{max-width:1100px;margin:auto;padding:14px}
+form,.toolbar,.typing{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+input,button{font:inherit;padding:11px;border:1px solid #394256;border-radius:9px;background:#202838;color:white}
+input{min-width:0;flex:1}button{cursor:pointer}#status{color:#aab8d0;font-size:13px;margin:10px 0;overflow-wrap:anywhere}
+#screen{width:100%;display:block;cursor:crosshair;border:1px solid #394256;border-radius:8px;background:white;touch-action:manipulation}
+.note{color:#aab8d0;font-size:12px;line-height:1.5}
+</style>
+</head>
+<body>
+<header>🌐 Browser Mirror</header>
+<main>
+<form id="nav"><input id="url" type="url" placeholder="https://example.com" value="https://example.com" required><button>Go</button></form>
+<div class="toolbar">
+<button data-history="back">← Back</button><button data-history="forward">Forward →</button>
+<button data-history="reload">↻ Reload page</button><button id="refresh">Refresh view</button>
+</div>
+<div id="status">Connecting…</div>
+<img id="screen" alt="Rendered browser screen">
+<div class="typing"><input id="text" placeholder="Type into the focused webpage"><button id="send">Send</button></div>
+<div class="toolbar">
+<button data-key="Enter">Enter</button><button data-key="Tab">Tab</button><button data-key="Escape">Esc</button>
+<button data-key="Backspace">⌫</button><button id="up">↑ Scroll</button><button id="down">↓ Scroll</button>
+</div>
+<p class="note">Tap the screenshot to click the page. Click a webpage input before using the typing field. Screenshots refresh every 5 seconds. Do not use this mirror on a shared/public device; the browser session can contain sensitive data.</p>
+</main>
+<script>
+let token = sessionStorage.getItem("mirrorToken") || "";
+if (!token || new URLSearchParams(location.search).has("reset")) {
+  sessionStorage.removeItem("mirrorToken");
+  token = prompt("Enter your private mirror access token") || "";
+  if (token) sessionStorage.setItem("mirrorToken", token);
+  if (location.search.includes("reset")) history.replaceState({}, "", location.pathname);
+}
+const statusBox=document.querySelector("#status"),screen=document.querySelector("#screen");
+let previousObjectUrl=null, refreshing=false;
+async function api(path,body){
+  const response=await fetch("/api/"+path,{method:body===undefined?"GET":"POST",
+    headers:{"Authorization":"Bearer "+token,...(body===undefined?{}:{"Content-Type":"application/json"})},
+    body:body===undefined?undefined:JSON.stringify(body),cache:"no-store"});
+  if(!response.ok){if(response.status===401){sessionStorage.removeItem("mirrorToken");token="";}
+    let msg="Request failed: "+response.status;try{msg=(await response.json()).error||msg}catch{}throw new Error(msg)}
+  return response;
+}
+async function refresh(){
+  if(refreshing)return;refreshing=true;
+  try{
+    const data=await (await api("status")).json();
+    statusBox.textContent=(data.title||"(untitled)")+" — "+data.url;
+    const blob=await (await api("screenshot")).blob();
+    const next=URL.createObjectURL(blob);screen.src=next;
+    if(previousObjectUrl)URL.revokeObjectURL(previousObjectUrl);previousObjectUrl=next;
+  }catch(e){statusBox.textContent=e.message}
+  finally{refreshing=false}
+}
+document.querySelector("#nav").addEventListener("submit",async e=>{
+  e.preventDefault();let url=document.querySelector("#url").value.trim();
+  if(!/^https?:\/\//i.test(url))url="https://"+url;
+  try{await api("navigate",{url});await refresh()}catch(e){statusBox.textContent=e.message}
+});
+screen.addEventListener("click",async e=>{
+  const r=screen.getBoundingClientRect();
+  const x=(e.clientX-r.left)*screen.naturalWidth/r.width;
+  const y=(e.clientY-r.top)*screen.naturalHeight/r.height;
+  try{await api("click",{x,y});setTimeout(refresh,350)}catch(e){statusBox.textContent=e.message}
+});
+document.querySelector("#send").onclick=async()=>{
+  const f=document.querySelector("#text");
+  try{await api("type",{text:f.value});f.value="";setTimeout(refresh,250)}catch(e){statusBox.textContent=e.message}
+};
+document.querySelectorAll("[data-key]").forEach(b=>b.onclick=async()=>{
+  try{await api("key",{key:b.dataset.key});setTimeout(refresh,250)}catch(e){statusBox.textContent=e.message}
+});
+document.querySelectorAll("[data-history]").forEach(b=>b.onclick=async()=>{
+  try{await api("history",{action:b.dataset.history});setTimeout(refresh,500)}catch(e){statusBox.textContent=e.message}
+});
+document.querySelector("#up").onclick=()=>api("scroll",{amount:-500}).then(refresh).catch(e=>statusBox.textContent=e.message);
+document.querySelector("#down").onclick=()=>api("scroll",{amount:500}).then(refresh).catch(e=>statusBox.textContent=e.message);
+document.querySelector("#refresh").onclick=refresh;
+refresh();setInterval(refresh,5000);
+</script>
+</body>
+</html>
